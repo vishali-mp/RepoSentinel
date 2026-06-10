@@ -1,0 +1,163 @@
+name: RepoSentinel · Cross-Repo Scanner
+
+on:
+  # Every Monday at 08:00 UTC
+  schedule:
+    - cron: "0 8 * * 1"
+
+  # Manual trigger with configurable parameters
+  workflow_dispatch:
+    inputs:
+      topics:
+        description: "Space-separated GitHub topics (e.g. 'machine-learning rag llm')"
+        default: "machine-learning llm"
+        required: false
+      languages:
+        description: "Space-separated languages (e.g. 'python typescript')"
+        default: "python"
+        required: false
+      watchlist:
+        description: "Space-separated owner/repo pairs to always include"
+        default: ""
+        required: false
+      min_stars:
+        description: "Minimum star count for discovered repos"
+        default: "500"
+        required: false
+      max_repos:
+        description: "Maximum repos to scan"
+        default: "8"
+        required: false
+      commits_window:
+        description: "Recent commits to analyze per repo"
+        default: "20"
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  cross-repo-scan:
+    name: Cross-Repo Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60    # full scans can take a while
+
+    steps:
+      - name: Checkout RepoSentinel
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install anthropic requests ruff bandit chromadb scikit-learn pandas
+
+      # ----------------------------------------------------------------
+      # Restore cached repo workspace (speeds up incremental runs)
+      # ----------------------------------------------------------------
+      - name: Restore workspace cache
+        uses: actions/cache@v4
+        with:
+          path: .sentinel/workspace
+          key: sentinel-workspace-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            sentinel-workspace-${{ runner.os }}-
+
+      # ----------------------------------------------------------------
+      # Restore vector DB (persists finding history across runs)
+      # ----------------------------------------------------------------
+      - name: Restore vector DB cache
+        uses: actions/cache@v4
+        with:
+          path: .sentinel/chroma
+          key: sentinel-chroma-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            sentinel-chroma-${{ runner.os }}-
+
+      # ----------------------------------------------------------------
+      # Restore trained model (if available)
+      # ----------------------------------------------------------------
+      - name: Restore model cache
+        uses: actions/cache@v4
+        with:
+          path: .sentinel/model.pkl
+          key: sentinel-model-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            sentinel-model-${{ runner.os }}-
+
+      # ----------------------------------------------------------------
+      # Run cross-repo scan
+      # ----------------------------------------------------------------
+      - name: Run cross-repo scan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTINEL_DASHBOARD_REPO: ${{ secrets.SENTINEL_DASHBOARD_REPO }}
+        run: |
+          TOPICS="${{ github.event.inputs.topics || 'machine-learning llm' }}"
+          LANGUAGES="${{ github.event.inputs.languages || 'python' }}"
+          MAX_REPOS="${{ github.event.inputs.max_repos || '8' }}"
+          MIN_STARS="${{ github.event.inputs.min_stars || '500' }}"
+          WINDOW="${{ github.event.inputs.commits_window || '20' }}"
+
+          ARGS="--max-repos $MAX_REPOS --min-stars $MIN_STARS --commits-window $WINDOW"
+          ARGS="$ARGS --output-dir reports --workspace .sentinel/workspace"
+
+          # Add topics
+          if [ -n "$TOPICS" ]; then
+            ARGS="$ARGS --topics $TOPICS"
+          fi
+
+          # Add languages
+          if [ -n "$LANGUAGES" ]; then
+            ARGS="$ARGS --languages $LANGUAGES"
+          fi
+
+          # Add watchlist if provided
+          WATCHLIST="${{ github.event.inputs.watchlist }}"
+          if [ -n "$WATCHLIST" ]; then
+            ARGS="$ARGS --watchlist $WATCHLIST"
+          fi
+
+          python -m agent.scan $ARGS
+
+      # ----------------------------------------------------------------
+      # Re-train classifier if enough labelled data has accumulated
+      # ----------------------------------------------------------------
+      - name: Run fine-tuning (if enough data)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python - <<'EOF'
+          from agent.vector_store import FindingStore
+          from agent.trainer import train
+          store = FindingStore()
+          stats = store.stats()
+          labelled = stats.get("outcomes", {})
+          n = labelled.get("accepted", 0) + labelled.get("dismissed", 0)
+          print(f"Labelled examples: {n}")
+          if n >= 20:
+              report = train(store, min_examples=20)
+              print(f"Training result: {report['status']}")
+          else:
+              print("Not enough labelled data yet — skipping training.")
+          EOF
+
+      # ----------------------------------------------------------------
+      # Upload reports as artifacts
+      # ----------------------------------------------------------------
+      - name: Upload scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-scan-${{ github.run_id }}
+          path: |
+            reports/findings.json
+            reports/scan_report.md
+          retention-days: 90

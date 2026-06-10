@@ -1,0 +1,62 @@
+name: RepoSentinel · AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  schedule:
+    - cron: "0 6 * * 1"  # Every Monday at 06:00 UTC
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  analyze:
+    name: Code Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed for diff
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run static analysis tools
+        run: |
+          ruff check --output-format=github . || true
+          bandit -r . || true
+        continue-on-error: true
+
+      - name: Run RepoSentinel analysis
+        id: sentinel
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            python -m agent.main \
+              --mode pr \
+              --base-ref origin/${{ github.base_ref }} \
+              --head-ref ${{ github.head_ref }} \
+              --pr-number ${{ github.event.pull_request.number }} \
+              --commit-sha ${{ github.event.pull_request.head.sha }}
+          else
+            python -m agent.main \
+              --mode scheduled \
+              --base-ref HEAD~10 \
+              --head-ref HEAD \
+              --ref ${{ github.ref_name }}
+          fi

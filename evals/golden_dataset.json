@@ -1,0 +1,585 @@
+[
+  {
+    "id": "py-001",
+    "description": "SQL injection via f-string interpolation",
+    "language": "python",
+    "filename": "db.py",
+    "code": "def get_user(username):\n    query = f\"SELECT * FROM users WHERE username = '{username}'\"\n    return db.execute(query)",
+    "expected_findings": [
+      {
+        "category": "security",
+        "severity": "critical",
+        "line_range": [
+          2,
+          2
+        ],
+        "keywords": [
+          "sql injection",
+          "f-string",
+          "parameterised",
+          "sanitise",
+          "user input"
+        ],
+        "file": "db.py"
+      }
+    ],
+    "notes": "Classic SQL injection. Any mention of parameterised queries or avoiding string interpolation in SQL counts as a hit."
+  },
+  {
+    "id": "py-002",
+    "description": "Hardcoded secret in source",
+    "language": "python",
+    "filename": "config.py",
+    "code": "AWS_SECRET_KEY = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\nAWS_ACCESS_KEY = \"AKIAIOSFODNN7EXAMPLE\"\n\ndef get_client():\n    return boto3.client('s3', aws_access_key_id=AWS_ACCESS_KEY, aws_secret_access_key=AWS_SECRET_KEY)",
+    "expected_findings": [
+      {
+        "category": "security",
+        "severity": "critical",
+        "line_range": [
+          1,
+          2
+        ],
+        "keywords": [
+          "hardcoded",
+          "secret",
+          "credential",
+          "environment variable",
+          "aws"
+        ],
+        "file": "config.py"
+      }
+    ],
+    "notes": "Secret should come from env vars or a secrets manager, never committed to source."
+  },
+  {
+    "id": "py-003",
+    "description": "Mutable default argument bug",
+    "language": "python",
+    "filename": "utils.py",
+    "code": "def append_item(item, lst=[]):\n    lst.append(item)\n    return lst\n\n# Each call shares the same list across invocations",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "high",
+        "line_range": [
+          1,
+          1
+        ],
+        "keywords": [
+          "mutable default",
+          "shared state",
+          "default argument",
+          "none"
+        ],
+        "file": "utils.py"
+      }
+    ],
+    "notes": "Python evaluates default args once at function definition. The list is shared across all calls."
+  },
+  {
+    "id": "py-004",
+    "description": "Missing error handling on file open",
+    "language": "python",
+    "filename": "reader.py",
+    "code": "def read_config(path):\n    f = open(path)\n    data = f.read()\n    f.close()\n    return json.loads(data)",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "high",
+        "line_range": [
+          1,
+          5
+        ],
+        "keywords": [
+          "exception",
+          "try",
+          "finally",
+          "context manager",
+          "with",
+          "file not found",
+          "leak"
+        ],
+        "file": "reader.py"
+      }
+    ],
+    "notes": "File not closed if read() or json.loads() raises. Should use 'with open(...)' context manager."
+  },
+  {
+    "id": "py-005",
+    "description": "N+1 query pattern in loop",
+    "language": "python",
+    "filename": "views.py",
+    "code": "def get_posts_with_authors(post_ids):\n    posts = []\n    for post_id in post_ids:\n        post = db.query(Post).filter(Post.id == post_id).first()\n        author = db.query(User).filter(User.id == post.author_id).first()\n        posts.append({'post': post, 'author': author})\n    return posts",
+    "expected_findings": [
+      {
+        "category": "performance",
+        "severity": "high",
+        "line_range": [
+          3,
+          6
+        ],
+        "keywords": [
+          "n+1",
+          "query",
+          "loop",
+          "join",
+          "batch",
+          "eager loading",
+          "database"
+        ],
+        "file": "views.py"
+      }
+    ],
+    "notes": "Issues one DB query per post. Should use a JOIN or batch fetch all authors in one query."
+  },
+  {
+    "id": "py-006",
+    "description": "Race condition on shared counter without lock",
+    "language": "python",
+    "filename": "counter.py",
+    "code": "import threading\n\ncounter = 0\n\ndef increment():\n    global counter\n    temp = counter\n    temp += 1\n    counter = temp\n\nthreads = [threading.Thread(target=increment) for _ in range(1000)]\nfor t in threads: t.start()\nfor t in threads: t.join()",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "high",
+        "line_range": [
+          5,
+          9
+        ],
+        "keywords": [
+          "race condition",
+          "thread",
+          "lock",
+          "atomic",
+          "synchronisation",
+          "concurrent"
+        ],
+        "file": "counter.py"
+      }
+    ],
+    "notes": "Non-atomic read-modify-write on shared state. Needs threading.Lock()."
+  },
+  {
+    "id": "py-007",
+    "description": "Unbounded memory accumulation in long-running process",
+    "language": "python",
+    "filename": "processor.py",
+    "code": "processed = []\n\ndef process_event(event):\n    result = expensive_transform(event)\n    processed.append(result)   # grows forever\n    return result",
+    "expected_findings": [
+      {
+        "category": "performance",
+        "severity": "medium",
+        "line_range": [
+          4,
+          5
+        ],
+        "keywords": [
+          "memory",
+          "leak",
+          "unbounded",
+          "accumulate",
+          "grow",
+          "limit",
+          "cache"
+        ],
+        "file": "processor.py"
+      }
+    ],
+    "notes": "Module-level list grows without bound. Should use a bounded deque or not store results."
+  },
+  {
+    "id": "py-008",
+    "description": "Path traversal vulnerability",
+    "language": "python",
+    "filename": "files.py",
+    "code": "import os\n\ndef serve_file(filename):\n    path = os.path.join('/var/www/files', filename)\n    with open(path) as f:\n        return f.read()",
+    "expected_findings": [
+      {
+        "category": "security",
+        "severity": "critical",
+        "line_range": [
+          3,
+          5
+        ],
+        "keywords": [
+          "path traversal",
+          "directory traversal",
+          "../",
+          "sanitise",
+          "realpath",
+          "abspath"
+        ],
+        "file": "files.py"
+      }
+    ],
+    "notes": "Attacker passes '../../../etc/passwd'. Should validate the resolved path starts with the base dir."
+  },
+  {
+    "id": "py-009",
+    "description": "Integer overflow in index calculation",
+    "language": "python",
+    "filename": "buffer.py",
+    "code": "def get_chunk(data: bytes, chunk_size: int, chunk_index: int) -> bytes:\n    start = chunk_size * chunk_index\n    end = start + chunk_size\n    return data[start:end]",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "medium",
+        "line_range": [
+          1,
+          4
+        ],
+        "keywords": [
+          "overflow",
+          "bounds",
+          "validation",
+          "negative",
+          "chunk_index",
+          "out of range"
+        ],
+        "file": "buffer.py"
+      }
+    ],
+    "notes": "No bounds checking. chunk_index could be negative or large enough to overflow. Python ints don't overflow but slice behaviour is unexpected."
+  },
+  {
+    "id": "py-010",
+    "description": "Using assert for input validation in production code",
+    "language": "python",
+    "filename": "api.py",
+    "code": "def transfer_funds(amount, account_id):\n    assert amount > 0, \"Amount must be positive\"\n    assert account_id is not None, \"Account required\"\n    return _do_transfer(amount, account_id)",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "high",
+        "line_range": [
+          2,
+          3
+        ],
+        "keywords": [
+          "assert",
+          "optimise",
+          "-O",
+          "disabled",
+          "production",
+          "valueerror",
+          "validation"
+        ],
+        "file": "api.py"
+      }
+    ],
+    "notes": "assert statements are stripped when Python runs with -O flag. Use explicit if/raise instead."
+  },
+  {
+    "id": "py-011",
+    "description": "Catching bare Exception and silencing errors",
+    "language": "python",
+    "filename": "worker.py",
+    "code": "def process(job):\n    try:\n        return _execute(job)\n    except Exception:\n        pass  # silently ignore all errors",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "high",
+        "line_range": [
+          3,
+          5
+        ],
+        "keywords": [
+          "swallow",
+          "silent",
+          "exception",
+          "logging",
+          "bare except",
+          "pass"
+        ],
+        "file": "worker.py"
+      }
+    ],
+    "notes": "Silently swallowing all exceptions makes debugging impossible. Should at minimum log."
+  },
+  {
+    "id": "py-012",
+    "description": "Regex denial of service (ReDoS)",
+    "language": "python",
+    "filename": "validate.py",
+    "code": "import re\n\ndef validate_email(email):\n    pattern = r'^([a-zA-Z0-9]+)*@[a-zA-Z0-9]+\\.[a-zA-Z]{2,}$'\n    return bool(re.match(pattern, email))",
+    "expected_findings": [
+      {
+        "category": "security",
+        "severity": "high",
+        "line_range": [
+          4,
+          5
+        ],
+        "keywords": [
+          "redos",
+          "catastrophic backtracking",
+          "regex",
+          "denial of service",
+          "timeout"
+        ],
+        "file": "validate.py"
+      }
+    ],
+    "notes": "The nested quantifier (([a-zA-Z0-9]+)*)+ causes exponential backtracking on crafted inputs."
+  },
+  {
+    "id": "py-013",
+    "description": "Deserialising untrusted pickle data",
+    "language": "python",
+    "filename": "cache.py",
+    "code": "import pickle\n\ndef load_from_cache(cache_key):\n    raw = redis_client.get(cache_key)\n    return pickle.loads(raw)  # deserialises user-supplied data",
+    "expected_findings": [
+      {
+        "category": "security",
+        "severity": "critical",
+        "line_range": [
+          5,
+          5
+        ],
+        "keywords": [
+          "pickle",
+          "deserialise",
+          "arbitrary code",
+          "untrusted",
+          "rce",
+          "remote code execution"
+        ],
+        "file": "cache.py"
+      }
+    ],
+    "notes": "pickle.loads on untrusted data allows arbitrary code execution. Use json or a safe serialiser."
+  },
+  {
+    "id": "py-014",
+    "description": "Blocking I/O inside async function",
+    "language": "python",
+    "filename": "async_handler.py",
+    "code": "import asyncio\nimport time\n\nasync def handle_request(request):\n    data = fetch_from_db(request.id)   # synchronous/blocking call\n    time.sleep(0.1)                    # blocks the event loop\n    return process(data)",
+    "expected_findings": [
+      {
+        "category": "performance",
+        "severity": "high",
+        "line_range": [
+          4,
+          7
+        ],
+        "keywords": [
+          "blocking",
+          "async",
+          "event loop",
+          "await",
+          "asyncio",
+          "run_in_executor",
+          "sleep"
+        ],
+        "file": "async_handler.py"
+      }
+    ],
+    "notes": "Blocking calls inside async functions stall the entire event loop. Use await with async-compatible libraries."
+  },
+  {
+    "id": "py-015",
+    "description": "Off-by-one in pagination",
+    "language": "python",
+    "filename": "pagination.py",
+    "code": "def paginate(items, page, page_size):\n    start = page * page_size\n    end = start + page_size\n    return items[start:end]\n\n# Page 0 = items 0..9, page 1 = items 10..19, etc.\n# But callers pass page starting from 1, not 0",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "medium",
+        "line_range": [
+          1,
+          4
+        ],
+        "keywords": [
+          "off-by-one",
+          "page",
+          "index",
+          "zero-based",
+          "one-based",
+          "pagination"
+        ],
+        "file": "pagination.py"
+      }
+    ],
+    "notes": "If API callers use 1-indexed pages but code uses 0-indexed, page 1 skips the first item."
+  },
+  {
+    "id": "ts-001",
+    "description": "Missing null check before property access",
+    "language": "typescript",
+    "filename": "user.ts",
+    "code": "async function getUserEmail(userId: string): Promise<string> {\n  const user = await db.users.findOne({ id: userId });\n  return user.email;  // user could be null if not found\n}",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "high",
+        "line_range": [
+          3,
+          3
+        ],
+        "keywords": [
+          "null",
+          "undefined",
+          "optional chaining",
+          "null check",
+          "not found"
+        ],
+        "file": "user.ts"
+      }
+    ],
+    "notes": "findOne returns null if no record found. Accessing .email throws TypeError at runtime."
+  },
+  {
+    "id": "ts-002",
+    "description": "Floating point equality comparison",
+    "language": "typescript",
+    "filename": "pricing.ts",
+    "code": "function applyDiscount(price: number, discount: number): boolean {\n  const discounted = price * (1 - discount);\n  return discounted === 0.1;  // floating point equality\n}",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "medium",
+        "line_range": [
+          3,
+          3
+        ],
+        "keywords": [
+          "floating point",
+          "equality",
+          "epsilon",
+          "precision",
+          "0.1",
+          "IEEE 754"
+        ],
+        "file": "pricing.ts"
+      }
+    ],
+    "notes": "Floating point arithmetic is imprecise. 0.1 + 0.2 !== 0.3. Use Math.abs(a - b) < epsilon."
+  },
+  {
+    "id": "ts-003",
+    "description": "Promise not awaited \u2014 fire and forget error",
+    "language": "typescript",
+    "filename": "notifications.ts",
+    "code": "async function sendWelcomeEmail(user: User): Promise<void> {\n  updateUserRecord(user.id, { welcomed: true });  // returns Promise, not awaited\n  await emailService.send(user.email, 'Welcome!');\n}",
+    "expected_findings": [
+      {
+        "category": "bug",
+        "severity": "medium",
+        "line_range": [
+          2,
+          2
+        ],
+        "keywords": [
+          "await",
+          "promise",
+          "unhandled",
+          "floating",
+          "fire and forget"
+        ],
+        "file": "notifications.ts"
+      }
+    ],
+    "notes": "The updateUserRecord promise is not awaited. Errors are silently swallowed and execution order is undefined."
+  },
+  {
+    "id": "ts-004",
+    "description": "XSS via innerHTML assignment",
+    "language": "typescript",
+    "filename": "renderer.ts",
+    "code": "function renderUserBio(bio: string): void {\n  const container = document.getElementById('bio');\n  container!.innerHTML = bio;  // unsanitised user content\n}",
+    "expected_findings": [
+      {
+        "category": "security",
+        "severity": "critical",
+        "line_range": [
+          3,
+          3
+        ],
+        "keywords": [
+          "xss",
+          "cross-site scripting",
+          "innerHTML",
+          "sanitise",
+          "textContent",
+          "DOMPurify"
+        ],
+        "file": "renderer.ts"
+      }
+    ],
+    "notes": "Setting innerHTML with unsanitised user input allows script injection. Use textContent or DOMPurify."
+  },
+  {
+    "id": "ts-005",
+    "description": "Unnecessary re-render due to inline object prop",
+    "language": "typescript",
+    "filename": "Component.tsx",
+    "code": "function ParentComponent() {\n  return (\n    <ExpensiveChild\n      config={{ theme: 'dark', size: 'lg' }}  // new object on every render\n      onUpdate={() => handleUpdate()}           // new function on every render\n    />\n  );\n}",
+    "expected_findings": [
+      {
+        "category": "performance",
+        "severity": "medium",
+        "line_range": [
+          3,
+          6
+        ],
+        "keywords": [
+          "re-render",
+          "useMemo",
+          "useCallback",
+          "reference equality",
+          "inline object",
+          "inline function"
+        ],
+        "file": "Component.tsx"
+      }
+    ],
+    "notes": "Inline objects and arrow functions create new references on every render, breaking React.memo and causing unnecessary re-renders."
+  },
+  {
+    "id": "clean-001",
+    "description": "Clean code \u2014 no bugs (true negative)",
+    "language": "python",
+    "filename": "safe_db.py",
+    "code": "def get_user(username: str) -> Optional[User]:\n    return db.session.query(User).filter(\n        User.username == username\n    ).first()",
+    "expected_findings": [],
+    "notes": "Parameterised query via ORM. No findings expected. Tests that the agent doesn't hallucinate bugs."
+  },
+  {
+    "id": "clean-002",
+    "description": "Clean code \u2014 proper async (true negative)",
+    "language": "python",
+    "filename": "safe_async.py",
+    "code": "import asyncio\n\nasync def fetch_data(url: str) -> dict:\n    async with aiohttp.ClientSession() as session:\n        async with session.get(url) as response:\n            response.raise_for_status()\n            return await response.json()",
+    "expected_findings": [],
+    "notes": "Correct async pattern, context managers, error handling. No findings expected."
+  },
+  {
+    "id": "clean-003",
+    "description": "Clean code \u2014 safe file handling (true negative)",
+    "language": "python",
+    "filename": "safe_files.py",
+    "code": "import os\nfrom pathlib import Path\n\ndef serve_file(base_dir: str, filename: str) -> str:\n    base = Path(base_dir).resolve()\n    requested = (base / filename).resolve()\n    if not str(requested).startswith(str(base)):\n        raise PermissionError(f'Access denied: {filename}')\n    return requested.read_text()",
+    "expected_findings": [],
+    "notes": "Proper path traversal prevention using resolve(). No findings expected."
+  },
+  {
+    "id": "clean-004",
+    "description": "Clean code \u2014 parameterised queries (true negative)",
+    "language": "python",
+    "filename": "safe_query.py",
+    "code": "def search_products(query: str, category: str) -> list:\n    return db.execute(\n        'SELECT * FROM products WHERE name LIKE %s AND category = %s',\n        (f'%{query}%', category)\n    ).fetchall()",
+    "expected_findings": [],
+    "notes": "Parameterised query \u2014 no SQL injection. No findings expected."
+  },
+  {
+    "id": "clean-005",
+    "description": "Clean code \u2014 proper secret management (true negative)",
+    "language": "python",
+    "filename": "safe_config.py",
+    "code": "import os\n\ndef get_db_url() -> str:\n    url = os.environ.get('DATABASE_URL')\n    if not url:\n        raise EnvironmentError('DATABASE_URL must be set')\n    return url",
+    "expected_findings": [],
+    "notes": "Secrets from environment. Raises if missing. No findings expected."
+  }
+]

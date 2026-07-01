@@ -13,7 +13,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-import anthropic
+# ---------------------------------------------------------------------------
+# LLM provider selection
+# ---------------------------------------------------------------------------
+
+def _llm_provider() -> str:
+    return os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -166,27 +172,16 @@ SYSTEM_PROMPT = textwrap.dedent("""
 """).strip()
 
 
-def query_llm(
+def _build_prompt(
     diff: str,
     file_contents: dict[str, str],
     static_output: str,
-    confidence_threshold: float = 0.7,
-    system_prompt_override: str | None = None,
-) -> list[Finding]:
-    """Send code context to Claude and parse structured findings.
-
-    system_prompt_override: replaces SYSTEM_PROMPT entirely — used by the
-    A/B eval harness to compare prompt variants without changing the codebase.
-    """
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    system = system_prompt_override if system_prompt_override else SYSTEM_PROMPT
-
+) -> str:
     file_block = "\n\n".join(
         f"### {path}\n```\n{content[:8_000]}\n```"
         for path, content in file_contents.items()
     )
-
-    user_message = textwrap.dedent(f"""
+    return textwrap.dedent(f"""
         ## Git diff
         ```diff
         {diff[:20_000]}
@@ -201,28 +196,73 @@ def query_llm(
         {file_block}
     """).strip()
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        system=system,
-        messages=[{"role": "user", "content": user_message}],
-    )
 
-    raw = response.content[0].text.strip()
-
-    # Strip accidental markdown fences
+def _parse_findings(raw: str, confidence_threshold: float) -> list[Finding]:
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-
     data = json.loads(raw)
-    findings = []
-    for item in data:
-        f = Finding(**item)
-        if f.confidence >= confidence_threshold:
-            findings.append(f)
-    return findings
+    return [Finding(**item) for item in data if item.get("confidence", 0) >= confidence_threshold]
+
+
+def _get_model(default_anthropic: str = "claude-sonnet-4-20250514", default_gemini: str = "gemini-2.0-flash") -> str:
+    return os.getenv("LLM_MODEL") or (
+        default_gemini if _llm_provider() == "gemini" else default_anthropic
+    )
+
+
+def _query_anthropic(system: str, user_message: str) -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    response = client.messages.create(
+        model=_get_model(),
+        max_tokens=4096,
+        system=system,
+        messages=[{"role": "user", "content": user_message}],
+    )
+    return response.content[0].text.strip()
+
+
+def _query_gemini(system: str, user_message: str) -> str:
+    from google import genai
+    config = genai.types.GenerateContentConfig(
+        system_instruction=system,
+        max_output_tokens=4096,
+    )
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    response = client.models.generate_content(
+        model=_get_model(),
+        contents=user_message,
+        config=config,
+    )
+    return response.text.strip()
+
+
+def query_llm(
+    diff: str,
+    file_contents: dict[str, str],
+    static_output: str,
+    confidence_threshold: float = 0.7,
+    system_prompt_override: str | None = None,
+) -> list[Finding]:
+    """Send code context to LLM and parse structured findings.
+
+    Provider is selected via the LLM_PROVIDER env var (anthropic | gemini).
+
+    system_prompt_override: replaces SYSTEM_PROMPT entirely — used by the
+    A/B eval harness to compare prompt variants without changing the codebase.
+    """
+    system = system_prompt_override if system_prompt_override else SYSTEM_PROMPT
+    user_message = _build_prompt(diff, file_contents, static_output)
+
+    provider = _llm_provider()
+    if provider == "gemini":
+        raw = _query_gemini(system, user_message)
+    else:
+        raw = _query_anthropic(system, user_message)
+
+    return _parse_findings(raw, confidence_threshold)
 
 
 # ---------------------------------------------------------------------------

@@ -29,10 +29,18 @@ import textwrap
 from pathlib import Path
 from typing import AsyncIterator
 
-import anthropic
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.analyzer import Finding, SYSTEM_PROMPT
+
+
+def _llm_provider() -> str:
+    return os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+
+
+def _get_model() -> str:
+    return os.getenv("LLM_MODEL") or (
+        "gemini-2.0-flash" if _llm_provider() == "gemini" else "claude-sonnet-4-20250514"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -107,30 +115,12 @@ class FindingStreamParser:
 # Streaming analyzer
 # ---------------------------------------------------------------------------
 
-async def stream_findings(
-    diff: str,
-    file_contents: dict[str, str],
-    static_output: str = "{}",
-    confidence_threshold: float = 0.65,
-    system_prompt: str = SYSTEM_PROMPT,
-) -> AsyncIterator[Finding]:
-    """
-    Async generator that yields Finding objects one at a time as Claude
-    generates them, using the Anthropic streaming API.
-
-    Usage:
-        async for finding in stream_findings(diff, file_contents):
-            # finding is available immediately, not after all are done
-            yield finding
-    """
-    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
+def _build_message(diff: str, file_contents: dict[str, str], static_output: str) -> str:
     file_block = "\n\n".join(
         f"### {path}\n```\n{content[:8_000]}\n```"
         for path, content in file_contents.items()
     )
-
-    user_message = textwrap.dedent(f"""
+    return textwrap.dedent(f"""
         ## Git diff
         ```diff
         {diff[:20_000]}
@@ -145,18 +135,71 @@ async def stream_findings(
         {file_block}
     """).strip()
 
-    parser = FindingStreamParser()
 
-    # Use the async streaming context manager
+async def _stream_anthropic(
+    system_prompt: str, user_message: str, parser: FindingStreamParser, confidence_threshold: float,
+) -> AsyncIterator[Finding]:
+    import anthropic
+    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     async with client.messages.stream(
-        model="claude-sonnet-4-20250514",
+        model=_get_model(),
         max_tokens=4096,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
     ) as stream:
         async for text_chunk in stream.text_stream:
-            # Feed each text delta to the parser
             findings = parser.feed(text_chunk)
             for f in findings:
                 if f.confidence >= confidence_threshold:
                     yield f
+
+
+async def _stream_gemini(
+    system_prompt: str, user_message: str, parser: FindingStreamParser, confidence_threshold: float,
+) -> AsyncIterator[Finding]:
+    from google import genai
+    config = genai.types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        max_output_tokens=4096,
+    )
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    stream = await client.aio.models.generate_content_stream(
+        model=_get_model(),
+        contents=user_message,
+        config=config,
+    )
+    async for chunk in stream:
+        if chunk.text:
+            findings = parser.feed(chunk.text)
+            for f in findings:
+                if f.confidence >= confidence_threshold:
+                    yield f
+
+
+async def stream_findings(
+    diff: str,
+    file_contents: dict[str, str],
+    static_output: str = "{}",
+    confidence_threshold: float = 0.65,
+    system_prompt: str = SYSTEM_PROMPT,
+) -> AsyncIterator[Finding]:
+    """
+    Async generator that yields Finding objects one at a time as the LLM
+    generates them, using streaming API.
+
+    Provider is selected via the LLM_PROVIDER env var (anthropic | gemini).
+
+    Usage:
+        async for finding in stream_findings(diff, file_contents):
+            yield finding
+    """
+    user_message = _build_message(diff, file_contents, static_output)
+    parser = FindingStreamParser()
+
+    provider = _llm_provider()
+    if provider == "gemini":
+        async for f in _stream_gemini(system_prompt, user_message, parser, confidence_threshold):
+            yield f
+    else:
+        async for f in _stream_anthropic(system_prompt, user_message, parser, confidence_threshold):
+            yield f

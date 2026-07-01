@@ -35,6 +35,9 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 
+from dotenv import load_dotenv
+load_dotenv()
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.analyzer import run_ruff, run_bandit, read_file_with_lines
 from webapp.streaming import stream_findings
@@ -278,13 +281,23 @@ async def health():
 async def scan(
     repo: str = Query(..., description="GitHub repo URL or owner/repo"),
     commits: int = Query(20, ge=1, le=100, description="Number of recent commits to analyze"),
+    model: str = Query("gemini-2.0-flash", description="LLM model name (e.g. claude-sonnet-4-20250514, gemini-2.0-flash)"),
 ):
     """
     Stream findings for a GitHub repository as Server-Sent Events.
 
-    Connect with: new EventSource('/scan?repo=owner/repo')
+    Connect with: new EventSource('/scan?repo=owner/repo&model=gemini-2.0-flash')
     """
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    # Derive provider from model name
+    provider = "gemini" if model.startswith("gemini") else "anthropic"
+    os.environ["LLM_PROVIDER"] = provider
+    os.environ["LLM_MODEL"] = model
+
+    if provider == "gemini" and not os.getenv("GEMINI_API_KEY"):
+        async def error_stream():
+            yield sse({"event": "error", "message": "GEMINI_API_KEY not configured on server."})
+        return StreamingResponse(error_stream(), media_type="text/event-stream")
+    if provider == "anthropic" and not os.getenv("ANTHROPIC_API_KEY"):
         async def error_stream():
             yield sse({"event": "error", "message": "ANTHROPIC_API_KEY not configured on server."})
         return StreamingResponse(error_stream(), media_type="text/event-stream")
@@ -359,6 +372,10 @@ HTML_PAGE = """<!DOCTYPE html>
               font-weight: 600; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
   .scan-btn:hover:not(:disabled) { background: #4D80FF; transform: translateY(-1px); }
   .scan-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .provider-select { background: var(--surface); border: 1px solid var(--border);
+                     border-radius: 8px; padding: 0.75rem 1rem; font-family: var(--mono);
+                     font-size: 13px; color: var(--text); outline: none; cursor: pointer; }
+  .provider-select:focus { border-color: var(--blue); }
 
   .examples { font-size: 12px; color: var(--muted); margin-bottom: 2.5rem; }
   .examples a { color: var(--blue); cursor: pointer; text-decoration: none; }
@@ -448,6 +465,19 @@ HTML_PAGE = """<!DOCTYPE html>
     <input class="repo-input" id="repoInput" type="text"
            placeholder="owner/repo  or  https://github.com/owner/repo"
            onkeydown="if(event.key==='Enter') startScan()">
+    <select id="modelSelect" class="provider-select">
+      <optgroup label="Anthropic">
+        <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+        <option value="claude-haiku-3-20240307">Claude Haiku 3</option>
+      </optgroup>
+      <optgroup label="Google (free tier)">
+        <option value="gemini-3.1-flash-lite" selected>Gemini 3.1 Flash Lite</option>
+        <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+        <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
+        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+        <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+      </optgroup>
+    </select>
     <button class="scan-btn" id="scanBtn" onclick="startScan()">Scan →</button>
   </div>
 
@@ -505,7 +535,8 @@ function startScan() {
   document.getElementById('scanBtn').disabled = true;
   document.getElementById('statusBar').className = 'status-bar show';
 
-  const url = `/scan?repo=${encodeURIComponent(repo)}&commits=20`;
+  const model = document.getElementById('modelSelect').value;
+  const url = `/scan?repo=${encodeURIComponent(repo)}&commits=20&model=${encodeURIComponent(model)}`;
   currentSource = new EventSource(url);
 
   currentSource.onmessage = (e) => {

@@ -99,15 +99,24 @@ pytest tests/ -v
 
 ## Self-hosting (webapp)
 
-Deploy with Docker (Render / Railway / Fly.io):
+### One-click on Render
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/vishali-mp/RepoSentinel)
+
+`render.yaml` is included — it sets up the service, env vars, and a 1 GB persistent disk for the vector store.
+
+### Manual Docker
 
 ```bash
 docker build -f webapp/Dockerfile -t reposentinel .
 docker run -p 8000:8000 \
   -e ANTHROPIC_API_KEY=sk-ant-... \
   -e GEMINI_API_KEY=AIza... \
+  -v chroma_data:/app/.sentinel/chroma \  # persist vector store across restarts
   reposentinel
 ```
+
+> **Vector store persistence:** The RAG context (past findings) lives in `.sentinel/chroma`. Set `SENTINEL_DB_PATH` to a persistent volume path to keep it across restarts. Render Disk and Docker volumes both work.
 
 ### Rate limiting & abuse protection
 

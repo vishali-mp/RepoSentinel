@@ -8,7 +8,7 @@ WORKDIR /app
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    fastapi uvicorn[standard] httpx
+    "fastapi[standard]" uvicorn[standard] httpx
 
 # Copy application code
 COPY agent/ ./agent/

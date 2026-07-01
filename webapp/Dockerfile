@@ -18,9 +18,6 @@ COPY evals/ ./evals/
 # Create non-root user for security
 RUN useradd -m -u 1000 sentinel && chown -R sentinel /app
 
-# Pre-create vector store directory (for Render Disk mount)
-RUN mkdir -p .sentinel/chroma && chown -R sentinel /app/.sentinel
-
 USER sentinel
 
 # Render / Railway / Fly.io all set PORT env var

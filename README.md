@@ -116,7 +116,15 @@ A `fly.toml` is included — it mounts a persistent volume at `/app/.sentinel/ch
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/vishali-mp/RepoSentinel)
 
-`render.yaml` is included — just connect your repo and add your API keys. Works on the free tier (vector store resets on restart; add a [persistent disk](https://render.com/docs/disks) for $0.10/GB if you want RAG context to survive deploys).
+```bash
+# 1. Fork/clone this repo
+# 2. Click the deploy button above
+# 3. Connect your GitHub repo
+# 4. Set ANTHROPIC_API_KEY and GEMINI_API_KEY
+# 5. Deploy — Render reads render.yaml automatically
+```
+
+`render.yaml` is included — works on the free tier. Vector store resets on restart; add a [persistent disk](https://render.com/docs/disks) for $0.10/GB if you want RAG context to survive deploys.
 
 ### Manual Docker
 

@@ -99,6 +99,19 @@ pytest tests/ -v
 
 ## Self-hosting (webapp)
 
+### Fly.io (recommended — free persistent volume)
+
+```bash
+# Install flyctl, then:
+fly launch --no-deploy
+fly volumes create chroma_data --region iad --size 1   # 1 GB, free tier
+fly secrets set ANTHROPIC_API_KEY=sk-ant-...
+fly secrets set GEMINI_API_KEY=AIza...
+fly deploy
+```
+
+A `fly.toml` is included — it mounts a persistent volume at `/app/.sentinel/chroma` so the RAG vector store survives restarts. Fly's free tier includes 3 GB of volume storage.
+
 ### One-click on Render
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/vishali-mp/RepoSentinel)

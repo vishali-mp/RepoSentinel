@@ -8,13 +8,8 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      - key: SENTINEL_DB_PATH
-        value: /data/chroma
       - key: RATE_LIMIT
         value: 5/minute
       - key: REPO_COOLDOWN_SECONDS
         value: "600"
-    disk:
-      name: chroma-data
-      mountPath: /data
-      sizeGB: 1
+

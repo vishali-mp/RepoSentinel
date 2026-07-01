@@ -28,12 +28,52 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, Query
+
+# ---------------------------------------------------------------------------
+# Per-repo cooldown (in-memory, resets on server restart)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RepoCache:
+    cache: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def cooldown_seconds(self) -> int:
+        return int(os.getenv("REPO_COOLDOWN_SECONDS", "600"))
+
+    def is_warm(self, repo: str) -> bool:
+        ts = self.cache.get(repo)
+        return ts is not None and (time.time() - ts) < self.cooldown_seconds
+
+    def remaining(self, repo: str) -> int:
+        ts = self.cache.get(repo)
+        if ts is None:
+            return 0
+        remain = int(self.cooldown_seconds - (time.time() - ts))
+        return max(remain, 0)
+
+    def mark(self, repo: str) -> None:
+        self.cache[repo] = time.time()
+
+
+repo_cache = RepoCache()
+
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
+
+def _rate_key(request: Request) -> str:
+    """Rate limit key: session + IP. Falls back to IP if no session param."""
+    session = request.query_params.get("session", "")
+    ip = request.client.host if request.client else "unknown"
+    return f"{ip}:{session}" if session else ip
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -41,6 +81,12 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.analyzer import run_ruff, run_bandit, read_file_with_lines
 from webapp.streaming import stream_findings
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+limiter = Limiter(key_func=_rate_key)
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -51,6 +97,9 @@ app = FastAPI(
     description="Autonomous AI code review agent — streaming findings via SSE",
     version="1.0.0",
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -278,16 +327,27 @@ async def health():
 
 
 @app.get("/scan")
+@limiter.limit(os.getenv("RATE_LIMIT", "5/minute"))
 async def scan(
+    request: Request,
     repo: str = Query(..., description="GitHub repo URL or owner/repo"),
     commits: int = Query(20, ge=1, le=100, description="Number of recent commits to analyze"),
     model: str = Query("gemini-2.0-flash", description="LLM model name (e.g. claude-sonnet-4-20250514, gemini-2.0-flash)"),
+    session: str = Query("", description="Client session ID for rate limiting"),
 ):
     """
     Stream findings for a GitHub repository as Server-Sent Events.
 
     Connect with: new EventSource('/scan?repo=owner/repo&model=gemini-2.0-flash')
     """
+    # Normalize repo name for cooldown key
+    repo_key = repo.strip().rstrip("/").lower()
+    if repo_cache.is_warm(repo_key):
+        remain = repo_cache.remaining(repo_key)
+        async def _cooldown_stream():
+            yield sse({"event": "error", "message": f"This repo was scanned recently. Please wait {remain}s before re-scanning."})
+        return StreamingResponse(_cooldown_stream(), media_type="text/event-stream")
+
     # Derive provider from model name
     provider = "gemini" if model.startswith("gemini") else "anthropic"
     os.environ["LLM_PROVIDER"] = provider
@@ -301,6 +361,8 @@ async def scan(
         async def error_stream():
             yield sse({"event": "error", "message": "ANTHROPIC_API_KEY not configured on server."})
         return StreamingResponse(error_stream(), media_type="text/event-stream")
+
+    repo_cache.mark(repo_key)
 
     return StreamingResponse(
         scan_repo_stream(repo, commits),
@@ -506,6 +568,16 @@ HTML_PAGE = """<!DOCTYPE html>
 </main>
 
 <script>
+// Session ID for per-user rate limiting (no login required)
+function getSessionId() {
+  let id = localStorage.getItem('sentinel_session');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('sentinel_session', id);
+  }
+  return id;
+}
+
 let currentSource = null;
 let findingCount = 0;
 
@@ -536,7 +608,8 @@ function startScan() {
   document.getElementById('statusBar').className = 'status-bar show';
 
   const model = document.getElementById('modelSelect').value;
-  const url = `/scan?repo=${encodeURIComponent(repo)}&commits=20&model=${encodeURIComponent(model)}`;
+  const session = getSessionId();
+  const url = `/scan?repo=${encodeURIComponent(repo)}&commits=20&model=${encodeURIComponent(model)}&session=${encodeURIComponent(session)}`;
   currentSource = new EventSource(url);
 
   currentSource.onmessage = (e) => {

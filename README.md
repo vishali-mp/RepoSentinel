@@ -57,6 +57,19 @@ Open a PR - RepoSentinel will comment with its analysis within ~2 minutes.
 | 🔒 **Security** | SQL injection, hardcoded secrets, insecure defaults, SSRF, path traversal |
 | 🎨 **Style** | Dead code, overly complex functions, missing error handling, unclear naming |
 
+## Hallucination & false positive prevention
+
+RepoSentinel uses layered mechanisms to avoid reporting issues that aren't real:
+
+| Layer | How it works |
+|-------|-------------|
+| **Confidence threshold** | LLM scores each finding 0.0–1.0; findings below 0.7 (configurable) are discarded |
+| **Prompt calibration** | System prompt explicitly says *"Avoid false positives — only report issues you are confident about"* and *"If you find no issues, return an empty array"* |
+| **Static tool priors** | Ruff + bandit + eslint output is injected as context; the LLM is told not to duplicate tool findings, focusing instead on semantic issues tools miss |
+| **Semantic deduplication** | ChromaDB with voyage-3-lite embeddings finds similar past findings (cosine similarity ≥ 0.92) and skips re-reporting the same class of issue |
+| **Learned classifier** | A scikit-learn model trains on accepted/dismissed findings over time, using precision-recall optimal thresholding to decide what to report |
+| **Eval harness** | 25-case golden dataset includes 5 clean-code true negatives; any finding on clean code counts as a hallucination. Precision/recall/F1 is tracked and A/B compared across prompt variants |
+
 ## Configuration
 
 | CLI flag | Default | Description |
@@ -83,6 +96,28 @@ python -m agent.main --base-ref HEAD~5 --json-output --no-issues
 ```bash
 pytest tests/ -v
 ```
+
+## Self-hosting (webapp)
+
+Deploy with Docker (Render / Railway / Fly.io):
+
+```bash
+docker build -f webapp/Dockerfile -t reposentinel .
+docker run -p 8000:8000 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e GEMINI_API_KEY=AIza... \
+  reposentinel
+```
+
+### Rate limiting & abuse protection
+
+The webapp includes layered protection to prevent API key abuse:
+
+| Layer | Env var | Default | How it works |
+|-------|---------|---------|-------------|
+| **Session + IP rate limit** | `RATE_LIMIT` | `5/minute` | Each browser generates a UUID session; combined with IP for rate key |
+| **Per-repo cooldown** | `REPO_COOLDOWN_SECONDS` | `600` | Same repo can't be re-scanned within N seconds |
+| **API spending cap** | *(set at provider)* | — | Hard cost limit in your Anthropic / GCP console |
 
 ## Architecture
 

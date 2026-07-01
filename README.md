@@ -112,20 +112,6 @@ fly deploy
 
 A `fly.toml` is included — it mounts a persistent volume at `/app/.sentinel/chroma` so the RAG vector store survives restarts. Fly's free tier includes 3 GB of volume storage.
 
-### One-click on Render
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/vishali-mp/RepoSentinel)
-
-```bash
-# 1. Fork/clone this repo
-# 2. Click the deploy button above
-# 3. Connect your GitHub repo
-# 4. Set ANTHROPIC_API_KEY and GEMINI_API_KEY
-# 5. Deploy — Render reads render.yaml automatically
-```
-
-`render.yaml` is included — works on the free tier. Vector store resets on restart; add a [persistent disk](https://render.com/docs/disks) for $0.10/GB if you want RAG context to survive deploys.
-
 ### Manual Docker
 
 ```bash
